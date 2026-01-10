@@ -169,9 +169,9 @@ async function checkPlayers() {
       }
     });
 
-    // Temps IG (+1h pour corriger le décalage)
+    // Temps IG
     const serverTime = data.servertime || 0;
-    const hours = (Math.floor(serverTime / 1000) + 1) % 24; // +1h
+    const hours = Math.floor(serverTime / 1000) % 24;
     const minutes = Math.floor((serverTime % 1000) / 1000 * 60);
     const timeIG = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00`;
     
