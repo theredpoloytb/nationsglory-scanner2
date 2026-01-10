@@ -4,7 +4,7 @@ const fs = require('fs');
 // CONFIG - Variables d'environnement
 const DYNMAP_URL = process.env.DYNMAP_URL || 'https://lime.nationsglory.fr/standalone/dynmap_world.json';
 const WEBHOOK_URL = process.env.DISCORD_WEBHOOK || '';
-const CHECK_INTERVAL = parseInt(process.env.CHECK_INTERVAL) || 10000; // 10 secondes
+const CHECK_INTERVAL = parseInt(process.env.CHECK_INTERVAL) || 1000; // 1 seconde
 const MESSAGE_FILE = 'message_id.txt';
 
 // Liste des joueurs à surveiller
@@ -169,9 +169,9 @@ async function checkPlayers() {
       }
     });
 
-    // Temps IG
+    // Temps IG (+1h pour corriger le décalage)
     const serverTime = data.servertime || 0;
-    const hours = Math.floor(serverTime / 1000) % 24;
+    const hours = (Math.floor(serverTime / 1000) + 1) % 24; // +1h
     const minutes = Math.floor((serverTime % 1000) / 1000 * 60);
     const timeIG = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00`;
     
@@ -217,7 +217,7 @@ async function checkPlayers() {
         }
       ],
       footer: {
-        text: "Scanner automatique 24/7 • Actualisation toutes les 10s"
+        text: "Scanner automatique 24/7 • Actualisation toutes les 1s"
       },
       timestamp: now.toISOString()
     };
