@@ -7,6 +7,7 @@ const DYNMAP_URL = process.env.DYNMAP_URL || 'https://lime.nationsglory.fr/stand
 const WEBHOOK_URL = process.env.DISCORD_WEBHOOK || '';
 const CHECK_INTERVAL = parseInt(process.env.CHECK_INTERVAL) || 1000;
 const MESSAGE_FILE = 'message_id.txt';
+const RENDER_URL = process.env.RENDER_EXTERNAL_URL || ''; // URL de votre app Render
 
 // Liste des joueurs à surveiller
 const WATCH_LIST = [
@@ -124,6 +125,19 @@ async function sendOrEditMessage(embed) {
   }
 }
 
+// 🔥 SELF-PING pour contourner l'inactivité Render
+function selfPing() {
+  if (!RENDER_URL) return;
+  
+  const url = RENDER_URL.startsWith('http') ? RENDER_URL : `https://${RENDER_URL}`;
+  
+  https.get(url, (res) => {
+    console.log(`🔄 Self-ping: ${res.statusCode}`);
+  }).on('error', (err) => {
+    console.log(`⚠️ Self-ping échoué: ${err.message}`);
+  });
+}
+
 // MAIN
 async function checkPlayers() {
   try {
@@ -145,9 +159,7 @@ async function checkPlayers() {
     const minutes = Math.floor((serverTime % 1000) / 1000 * 60);
     const timeIG = `${String(hours).padStart(2,'0')}:${String(minutes).padStart(2,'0')}:00`;
 
-    // 🔥 HEURE CORRIGÉE
     const now = new Date();
-
     const timeStr = now.toLocaleTimeString('fr-FR', {
       timeZone: 'Europe/Paris',
       hour: '2-digit',
@@ -176,7 +188,7 @@ async function checkPlayers() {
         { name: "👁️ Statut Surveillance", value: statusText || "Aucun joueur surveillé en ligne" }
       ],
       footer: { text: "Scanner automatique 24/7 • Actualisation toutes les 1s" },
-      timestamp: new Date().toISOString() // UTC OK pour Discord
+      timestamp: new Date().toISOString()
     };
 
     await sendOrEditMessage(embed);
@@ -193,9 +205,19 @@ loadMessageId();
 checkPlayers();
 setInterval(checkPlayers, CHECK_INTERVAL);
 
-// Keep alive
-const server = http.createServer((_, res) => {
-  res.writeHead(200);
-  res.end('LIME Scanner running');
+// 🔥 Self-ping toutes les 10 minutes (600000ms) pour éviter le sleep de Render
+if (RENDER_URL) {
+  console.log(`🔄 Self-ping activé vers: ${RENDER_URL}`);
+  setInterval(selfPing, 600000); // 10 minutes
+}
+
+// Keep alive server
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('LIME Scanner running ✅');
 });
-server.listen(process.env.PORT || 3000);
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`🚀 Serveur démarré sur le port ${PORT}`);
+});
