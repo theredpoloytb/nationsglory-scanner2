@@ -176,7 +176,10 @@ async function checkPlayers() {
     const timeIG = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00`;
     
     const now = new Date();
+    now.setHours(now.getHours() + 1);
+
     const timeStr = now.toLocaleTimeString('fr-FR');
+  
 
     // Préparer le message Discord
     let statusText = '';
@@ -252,3 +255,4 @@ const server = http.createServer((req, res) => {
 });
 server.listen(process.env.PORT || 3000);
 console.log(`🌐 Health check sur port ${process.env.PORT || 3000}`);
+
