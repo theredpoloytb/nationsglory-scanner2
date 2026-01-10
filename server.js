@@ -7,7 +7,7 @@ const DYNMAP_URL = process.env.DYNMAP_URL || 'https://lime.nationsglory.fr/stand
 const WEBHOOK_URL = process.env.DISCORD_WEBHOOK || '';
 const CHECK_INTERVAL = parseInt(process.env.CHECK_INTERVAL) || 1000;
 const MESSAGE_FILE = 'message_id.txt';
-const RENDER_URL = process.env.RENDER_EXTERNAL_URL || ''; // URL de votre app Render
+const RENDER_URL = process.env.RENDER_EXTERNAL_URL || 'https://nationsglory-scanner2.onrender.com';
 
 // Liste des joueurs à surveiller
 const WATCH_LIST = [
