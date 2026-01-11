@@ -30,6 +30,10 @@ const API_KEY = process.env.NG_API_KEY || 'NGAPI_6CNZf5YqF*G%35ZSNgQmyeyBSmwO0Yo
 const MESSAGE_FILE_2 = 'message_id_2.txt';
 const NATIONS_TO_WATCH = ['coreedunord', 'armenie'];
 
+// ==================== CACHE DES GRADES ====================
+const playerGradeCache = new Map();
+const CACHE_DURATION = 60000; // 60 secondes - durée du cache
+
 // ==================== VERIFICATION WEBHOOKS ====================
 if (!WEBHOOK_URL) {
   console.error('❌ ERREUR: DISCORD_WEBHOOK non défini');
@@ -53,11 +57,10 @@ let webhookToken2 = null;
 
 // Rate limiting
 let lastDiscordRequest = 0;
-const DISCORD_DELAY = 500; // 500ms entre chaque requête Discord
+const DISCORD_DELAY = 500;
 
 // ==================== FONCTIONS COMMUNES ====================
 
-// Attendre avant requête Discord
 async function waitForRateLimit() {
   const now = Date.now();
   const diff = now - lastDiscordRequest;
@@ -67,7 +70,6 @@ async function waitForRateLimit() {
   lastDiscordRequest = Date.now();
 }
 
-// Webhook parse
 function parseWebhook(url, isSecond = false) {
   const parts = url.split('/');
   const id = parts[parts.length - 2];
@@ -82,7 +84,6 @@ function parseWebhook(url, isSecond = false) {
   }
 }
 
-// Message ID
 function loadMessageId(file, isSecond = false) {
   if (fs.existsSync(file)) {
     const id = fs.readFileSync(file, 'utf8').trim();
@@ -105,7 +106,6 @@ function saveMessageId(id, file, isSecond = false) {
   fs.writeFileSync(file, id);
 }
 
-// Fetch JSON
 function fetchJSON(url) {
   return new Promise((resolve, reject) => {
     https.get(url, res => {
@@ -122,7 +122,6 @@ function fetchJSON(url) {
   });
 }
 
-// Fetch avec authentification (pour l'API NationsGlory)
 function fetchWithAuth(url, apiKey) {
   return new Promise((resolve, reject) => {
     const urlObj = new URL(url);
@@ -150,7 +149,6 @@ function fetchWithAuth(url, apiKey) {
   });
 }
 
-// Discord request
 function makeRequest(method, path, data = null) {
   return new Promise((resolve, reject) => {
     const options = {
@@ -183,7 +181,6 @@ function makeRequest(method, path, data = null) {
   });
 }
 
-// Send / edit embed avec rate limiting
 async function sendOrEditMessage(embed, isSecond = false, pingEveryone = false) {
   try {
     await waitForRateLimit();
@@ -198,7 +195,6 @@ async function sendOrEditMessage(embed, isSecond = false, pingEveryone = false) 
     }
 
     if (msgId) {
-      // Essayer d'éditer le message existant
       try {
         await makeRequest(
           'PATCH',
@@ -206,7 +202,6 @@ async function sendOrEditMessage(embed, isSecond = false, pingEveryone = false) 
           payload
         );
       } catch (e) {
-        // Si l'édition échoue (message supprimé), créer un nouveau
         console.log(`⚠️ Message ${msgId} introuvable, création d'un nouveau...`);
         if (isSecond) {
           messageId2 = null;
@@ -223,7 +218,6 @@ async function sendOrEditMessage(embed, isSecond = false, pingEveryone = false) 
         saveMessageId(res.id, isSecond ? MESSAGE_FILE_2 : MESSAGE_FILE, isSecond);
       }
     } else {
-      // Créer un nouveau message
       const res = await makeRequest(
         'POST',
         `/api/webhooks/${whId}/${whToken}?wait=true`,
@@ -236,7 +230,6 @@ async function sendOrEditMessage(embed, isSecond = false, pingEveryone = false) 
   }
 }
 
-// Self-ping pour Render
 function selfPing() {
   if (!RENDER_URL) return;
   
@@ -247,6 +240,61 @@ function selfPing() {
   }).on('error', (err) => {
     console.log(`⚠️ Self-ping échoué: ${err.message}`);
   });
+}
+
+// ==================== FONCTIONS CACHE GRADES ====================
+
+// Récupérer le grade depuis le cache ou l'API
+async function getPlayerGrade(playerName) {
+  const cached = playerGradeCache.get(playerName);
+  const now = Date.now();
+  
+  // Si le cache est valide (moins de 60s), on l'utilise
+  if (cached && (now - cached.timestamp) < CACHE_DURATION) {
+    return cached.rank;
+  }
+  
+  // Sinon on fait un appel API
+  try {
+    const playerData = await fetchWithAuth(
+      `https://publicapi.nationsglory.fr/user/${playerName}`,
+      API_KEY
+    );
+    
+    const rank = playerData.servers?.lime?.country_rank || 'recruit';
+    
+    // Stocker dans le cache avec timestamp
+    playerGradeCache.set(playerName, {
+      rank: rank,
+      timestamp: now
+    });
+    
+    return rank;
+  } catch (e) {
+    console.error(`⚠️ Erreur récupération grade ${playerName}:`, e.message);
+    
+    // Si erreur mais on a un ancien cache, on l'utilise quand même
+    if (cached) {
+      console.log(`  → Utilisation cache expiré pour ${playerName}`);
+      return cached.rank;
+    }
+    
+    return 'unknown';
+  }
+}
+
+// Nettoyer le cache périodiquement (toutes les 5 minutes)
+function cleanCache() {
+  const now = Date.now();
+  const expiredTime = now - (CACHE_DURATION * 2); // Supprimer après 2x la durée du cache
+  
+  for (const [player, data] of playerGradeCache.entries()) {
+    if (data.timestamp < expiredTime) {
+      playerGradeCache.delete(player);
+    }
+  }
+  
+  console.log(`🧹 Cache nettoyé: ${playerGradeCache.size} joueurs en mémoire`);
 }
 
 // ==================== SCANNER 1 : WATCH LIST ====================
@@ -264,7 +312,6 @@ async function checkPlayers() {
       (onlinePlayers.includes(p) ? watchedOnline : watchedOffline).push(p);
     });
 
-    // Temps IG
     const serverTime = data.servertime || 0;
     const hours = Math.floor(serverTime / 1000) % 24;
     const minutes = Math.floor((serverTime % 1000) / 1000 * 60);
@@ -343,31 +390,17 @@ async function checkNations() {
           const cleanName = member.replace(/^[*+-]/, '');
           
           if (onlinePlayers.includes(cleanName)) {
-            // Récupérer les infos du joueur pour son grade
-            try {
-              const playerData = await fetchWithAuth(
-                `https://publicapi.nationsglory.fr/user/${cleanName}`,
-                API_KEY
-              );
+            // Utiliser le cache pour récupérer le grade
+            const rank = await getPlayerGrade(cleanName);
+            
+            onlineMembers.push({
+              name: cleanName,
+              rank: rank,
+              canAssault: rank === 'leader' || rank === 'officer' || rank === 'member'
+            });
 
-              const rank = playerData.servers?.lime?.country_rank || 'recruit';
-              
-              onlineMembers.push({
-                name: cleanName,
-                rank: rank,
-                isOfficer: rank === 'officer' || rank === 'leader'
-              });
-
-              // Petit délai pour éviter de spam l'API
-              await new Promise(resolve => setTimeout(resolve, 100));
-            } catch (e) {
-              console.error(`⚠️ Erreur récupération joueur ${cleanName}:`, e.message);
-              onlineMembers.push({
-                name: cleanName,
-                rank: 'unknown',
-                isOfficer: false
-              });
-            }
+            // Petit délai entre les appels API seulement si pas en cache
+            await new Promise(resolve => setTimeout(resolve, 50));
           }
         }
 
@@ -379,9 +412,9 @@ async function checkNations() {
 
         totalOnline += onlineMembers.length;
 
-        // Vérifier si assaut possible (2+ joueurs ET au moins 1 officier/leader)
-        const hasOfficer = onlineMembers.some(p => p.isOfficer);
-        if (onlineMembers.length >= 2 && hasOfficer) {
+        // Vérifier si assaut possible (2+ joueurs ET au moins 1 non-recruit)
+        const hasAssaulter = onlineMembers.some(p => p.canAssault);
+        if (onlineMembers.length >= 2 && hasAssaulter) {
           assaultPossible = true;
         }
       } catch (e) {
@@ -399,20 +432,20 @@ async function checkNations() {
     
     for (const nation of NATIONS_TO_WATCH) {
       const data = nationsData[nation];
-      const hasOfficer = data.online.some(p => p.isOfficer);
-      const canAssault = data.count >= 2 && hasOfficer;
+      const hasAssaulter = data.online.some(p => p.canAssault);
+      const canAssault = data.count >= 2 && hasAssaulter;
       const emoji = canAssault ? '🔴' : data.count >= 2 ? '🟠' : data.count === 1 ? '🟡' : '⚪';
       
       statusText += `${emoji} **${data.name.toUpperCase()}** : ${data.count} joueur${data.count > 1 ? 's' : ''} connecté${data.count > 1 ? 's' : ''}\n`;
       
       if (data.count > 0) {
         statusText += data.online.map(p => {
-          const rankEmoji = p.rank === 'leader' ? '👑' : p.rank === 'officer' ? '⭐' : '👤';
+          const rankEmoji = p.rank === 'leader' ? '👑' : p.rank === 'officer' ? '⭐' : p.rank === 'member' ? '👤' : '🆕';
           return `${rankEmoji} ${p.name} (${p.rank})`;
         }).join('\n') + '\n';
         
-        if (data.count >= 2 && !hasOfficer) {
-          statusText += '⚠️ *Aucun officier - Assaut impossible*\n';
+        if (data.count >= 2 && !hasAssaulter) {
+          statusText += '⚠️ *Que des recrues - Assaut impossible*\n';
         }
       }
       statusText += '\n';
@@ -420,7 +453,7 @@ async function checkNations() {
 
     if (assaultPossible) {
       statusText += '🚨 **ASSAUT POSSIBLE** 🚨\n';
-      statusText += '*Au moins 2 joueurs dont 1 officier/leader*\n';
+      statusText += '*Au moins 2 joueurs dont 1 member/officer/leader*\n';
     }
 
     const embed = {
@@ -432,12 +465,14 @@ async function checkNations() {
         { name: "🎯 Nations Surveillées", value: `**${NATIONS_TO_WATCH.length}**`, inline: true },
         { name: "📊 Statut des Nations", value: statusText }
       ],
-      footer: { text: "Scanner Nations 24/7 • 👑 Leader | ⭐ Officier | 👤 Membre" },
+      footer: { 
+        text: `Scanner Nations 24/7 • Cache: ${playerGradeCache.size} joueurs • 👑 Leader | ⭐ Officier | 👤 Membre` 
+      },
       timestamp: new Date().toISOString()
     };
 
     await sendOrEditMessage(embed, true, assaultPossible);
-    console.log(`[${timeStr}] Scanner 2 OK - ${totalOnline} joueurs | Assaut: ${assaultPossible ? 'OUI' : 'NON'}`);
+    console.log(`[${timeStr}] Scanner 2 OK - ${totalOnline} joueurs | Cache: ${playerGradeCache.size} | Assaut: ${assaultPossible ? 'OUI' : 'NON'}`);
   } catch (e) {
     console.error('❌ Erreur Scanner 2:', e.message);
   }
@@ -456,6 +491,9 @@ checkNations();
 setInterval(checkPlayers, CHECK_INTERVAL);
 setInterval(checkNations, CHECK_INTERVAL);
 
+// Nettoyer le cache toutes les 5 minutes
+setInterval(cleanCache, 300000);
+
 // Self-ping toutes les 10 minutes
 if (RENDER_URL) {
   console.log(`🔄 Self-ping activé vers: ${RENDER_URL}`);
@@ -473,4 +511,5 @@ server.listen(PORT, () => {
   console.log(`🚀 Serveur démarré sur le port ${PORT}`);
   console.log('📡 Scanner 1: Surveillance WATCH_LIST');
   console.log('⚔️ Scanner 2: Surveillance CoreeDuNord + Armenie');
+  console.log('💾 Cache grades: 60 secondes');
 });
