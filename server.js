@@ -51,7 +51,21 @@ let messageId2 = null;
 let webhookId2 = null;
 let webhookToken2 = null;
 
+// Rate limiting
+let lastDiscordRequest = 0;
+const DISCORD_DELAY = 500; // 500ms entre chaque requête Discord
+
 // ==================== FONCTIONS COMMUNES ====================
+
+// Attendre avant requête Discord
+async function waitForRateLimit() {
+  const now = Date.now();
+  const diff = now - lastDiscordRequest;
+  if (diff < DISCORD_DELAY) {
+    await new Promise(resolve => setTimeout(resolve, DISCORD_DELAY - diff));
+  }
+  lastDiscordRequest = Date.now();
+}
 
 // Webhook parse
 function parseWebhook(url, isSecond = false) {
@@ -169,9 +183,11 @@ function makeRequest(method, path, data = null) {
   });
 }
 
-// Send / edit embed
+// Send / edit embed avec rate limiting
 async function sendOrEditMessage(embed, isSecond = false, pingEveryone = false) {
   try {
+    await waitForRateLimit();
+    
     const whId = isSecond ? webhookId2 : webhookId;
     const whToken = isSecond ? webhookToken2 : webhookToken;
     const msgId = isSecond ? messageId2 : messageId;
@@ -182,12 +198,32 @@ async function sendOrEditMessage(embed, isSecond = false, pingEveryone = false) 
     }
 
     if (msgId) {
-      await makeRequest(
-        'PATCH',
-        `/api/webhooks/${whId}/${whToken}/messages/${msgId}`,
-        payload
-      );
+      // Essayer d'éditer le message existant
+      try {
+        await makeRequest(
+          'PATCH',
+          `/api/webhooks/${whId}/${whToken}/messages/${msgId}`,
+          payload
+        );
+      } catch (e) {
+        // Si l'édition échoue (message supprimé), créer un nouveau
+        console.log(`⚠️ Message ${msgId} introuvable, création d'un nouveau...`);
+        if (isSecond) {
+          messageId2 = null;
+        } else {
+          messageId = null;
+        }
+        
+        await waitForRateLimit();
+        const res = await makeRequest(
+          'POST',
+          `/api/webhooks/${whId}/${whToken}?wait=true`,
+          payload
+        );
+        saveMessageId(res.id, isSecond ? MESSAGE_FILE_2 : MESSAGE_FILE, isSecond);
+      }
     } else {
+      // Créer un nouveau message
       const res = await makeRequest(
         'POST',
         `/api/webhooks/${whId}/${whToken}?wait=true`,
@@ -196,11 +232,6 @@ async function sendOrEditMessage(embed, isSecond = false, pingEveryone = false) 
       saveMessageId(res.id, isSecond ? MESSAGE_FILE_2 : MESSAGE_FILE, isSecond);
     }
   } catch (e) {
-    if (isSecond) {
-      messageId2 = null;
-    } else {
-      messageId = null;
-    }
     console.error('❌ Erreur Discord:', e.message);
   }
 }
@@ -305,10 +336,40 @@ async function checkNations() {
         );
 
         const members = nationData.members || [];
-        const onlineMembers = members.filter(member => {
+        const onlineMembers = [];
+
+        // Vérifier chaque membre
+        for (const member of members) {
           const cleanName = member.replace(/^[*+-]/, '');
-          return onlinePlayers.includes(cleanName);
-        });
+          
+          if (onlinePlayers.includes(cleanName)) {
+            // Récupérer les infos du joueur pour son grade
+            try {
+              const playerData = await fetchWithAuth(
+                `https://publicapi.nationsglory.fr/user/${cleanName}`,
+                API_KEY
+              );
+
+              const rank = playerData.servers?.lime?.country_rank || 'recruit';
+              
+              onlineMembers.push({
+                name: cleanName,
+                rank: rank,
+                isOfficer: rank === 'officer' || rank === 'leader'
+              });
+
+              // Petit délai pour éviter de spam l'API
+              await new Promise(resolve => setTimeout(resolve, 100));
+            } catch (e) {
+              console.error(`⚠️ Erreur récupération joueur ${cleanName}:`, e.message);
+              onlineMembers.push({
+                name: cleanName,
+                rank: 'unknown',
+                isOfficer: false
+              });
+            }
+          }
+        }
 
         nationsData[nation] = {
           name: nationData.name || nation,
@@ -318,8 +379,9 @@ async function checkNations() {
 
         totalOnline += onlineMembers.length;
 
-        // Vérifier si assaut possible (2+ joueurs)
-        if (onlineMembers.length >= 2) {
+        // Vérifier si assaut possible (2+ joueurs ET au moins 1 officier/leader)
+        const hasOfficer = onlineMembers.some(p => p.isOfficer);
+        if (onlineMembers.length >= 2 && hasOfficer) {
           assaultPossible = true;
         }
       } catch (e) {
@@ -337,18 +399,28 @@ async function checkNations() {
     
     for (const nation of NATIONS_TO_WATCH) {
       const data = nationsData[nation];
-      const emoji = data.count >= 2 ? '🔴' : data.count === 1 ? '🟡' : '⚪';
+      const hasOfficer = data.online.some(p => p.isOfficer);
+      const canAssault = data.count >= 2 && hasOfficer;
+      const emoji = canAssault ? '🔴' : data.count >= 2 ? '🟠' : data.count === 1 ? '🟡' : '⚪';
       
       statusText += `${emoji} **${data.name.toUpperCase()}** : ${data.count} joueur${data.count > 1 ? 's' : ''} connecté${data.count > 1 ? 's' : ''}\n`;
       
       if (data.count > 0) {
-        statusText += data.online.map(p => `• ${p.replace(/^[*+-]/, '')}`).join('\n') + '\n';
+        statusText += data.online.map(p => {
+          const rankEmoji = p.rank === 'leader' ? '👑' : p.rank === 'officer' ? '⭐' : '👤';
+          return `${rankEmoji} ${p.name} (${p.rank})`;
+        }).join('\n') + '\n';
+        
+        if (data.count >= 2 && !hasOfficer) {
+          statusText += '⚠️ *Aucun officier - Assaut impossible*\n';
+        }
       }
       statusText += '\n';
     }
 
     if (assaultPossible) {
-      statusText += '⚠️ **ASSAUT POSSIBLE** ⚠️\n';
+      statusText += '🚨 **ASSAUT POSSIBLE** 🚨\n';
+      statusText += '*Au moins 2 joueurs dont 1 officier/leader*\n';
     }
 
     const embed = {
@@ -360,7 +432,7 @@ async function checkNations() {
         { name: "🎯 Nations Surveillées", value: `**${NATIONS_TO_WATCH.length}**`, inline: true },
         { name: "📊 Statut des Nations", value: statusText }
       ],
-      footer: { text: "Scanner Nations 24/7 • Actualisation toutes les 1s" },
+      footer: { text: "Scanner Nations 24/7 • 👑 Leader | ⭐ Officier | 👤 Membre" },
       timestamp: new Date().toISOString()
     };
 
