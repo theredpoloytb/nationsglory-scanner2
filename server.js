@@ -2,14 +2,14 @@ const https = require('https');
 const fs = require('fs');
 const http = require('http');
 
-// CONFIG
+// ==================== CONFIG SCANNER 1 (WATCH LIST) ====================
 const DYNMAP_URL = process.env.DYNMAP_URL || 'https://lime.nationsglory.fr/standalone/dynmap_world.json';
 const WEBHOOK_URL = process.env.DISCORD_WEBHOOK || '';
 const CHECK_INTERVAL = parseInt(process.env.CHECK_INTERVAL) || 1000;
 const MESSAGE_FILE = 'message_id.txt';
 const RENDER_URL = process.env.RENDER_EXTERNAL_URL || 'https://nationsglory-scanner2.onrender.com';
 
-// Liste des joueurs à surveiller
+// Liste des joueurs à surveiller (Scanner 1)
 const WATCH_LIST = [
   'Canisi',
   'Darkholess',
@@ -24,39 +24,105 @@ const WATCH_LIST = [
   'AstaPatate'
 ];
 
+// ==================== CONFIG SCANNER 2 (NATIONS) ====================
+const WEBHOOK_URL_2 = process.env.DISCORD_WEBHOOK_2 || '';
+const API_KEY = process.env.NG_API_KEY || 'NGAPI_6CNZf5YqF*G%35ZSNgQmyeyBSmwO0YoD03248a59af4faf14ddc92a471abbabf9';
+const MESSAGE_FILE_2 = 'message_id_2.txt';
+const NATIONS_TO_WATCH = ['coreedunord', 'armenie'];
+
+// ==================== VERIFICATION WEBHOOKS ====================
 if (!WEBHOOK_URL) {
   console.error('❌ ERREUR: DISCORD_WEBHOOK non défini');
   process.exit(1);
 }
 
+if (!WEBHOOK_URL_2) {
+  console.error('❌ ERREUR: DISCORD_WEBHOOK_2 non défini');
+  process.exit(1);
+}
+
+// ==================== VARIABLES SCANNER 1 ====================
 let messageId = null;
 let webhookId = null;
 let webhookToken = null;
 
-// Webhook parse
-function parseWebhook() {
-  const parts = WEBHOOK_URL.split('/');
-  webhookId = parts[parts.length - 2];
-  webhookToken = parts[parts.length - 1];
-}
+// ==================== VARIABLES SCANNER 2 ====================
+let messageId2 = null;
+let webhookId2 = null;
+let webhookToken2 = null;
 
-// Message ID
-function loadMessageId() {
-  if (fs.existsSync(MESSAGE_FILE)) {
-    messageId = fs.readFileSync(MESSAGE_FILE, 'utf8').trim();
-    console.log(`📝 Message ID chargé: ${messageId}`);
+// ==================== FONCTIONS COMMUNES ====================
+
+// Webhook parse
+function parseWebhook(url, isSecond = false) {
+  const parts = url.split('/');
+  const id = parts[parts.length - 2];
+  const token = parts[parts.length - 1];
+  
+  if (isSecond) {
+    webhookId2 = id;
+    webhookToken2 = token;
+  } else {
+    webhookId = id;
+    webhookToken = token;
   }
 }
 
-function saveMessageId(id) {
-  messageId = id;
-  fs.writeFileSync(MESSAGE_FILE, id);
+// Message ID
+function loadMessageId(file, isSecond = false) {
+  if (fs.existsSync(file)) {
+    const id = fs.readFileSync(file, 'utf8').trim();
+    if (isSecond) {
+      messageId2 = id;
+      console.log(`📝 Message ID 2 chargé: ${id}`);
+    } else {
+      messageId = id;
+      console.log(`📝 Message ID chargé: ${id}`);
+    }
+  }
+}
+
+function saveMessageId(id, file, isSecond = false) {
+  if (isSecond) {
+    messageId2 = id;
+  } else {
+    messageId = id;
+  }
+  fs.writeFileSync(file, id);
 }
 
 // Fetch JSON
 function fetchJSON(url) {
   return new Promise((resolve, reject) => {
     https.get(url, res => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch (e) {
+          reject(e);
+        }
+      });
+    }).on('error', reject);
+  });
+}
+
+// Fetch avec authentification (pour l'API NationsGlory)
+function fetchWithAuth(url, apiKey) {
+  return new Promise((resolve, reject) => {
+    const urlObj = new URL(url);
+    const options = {
+      hostname: urlObj.hostname,
+      path: urlObj.pathname,
+      method: 'GET',
+      headers: {
+        'accept': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      }
+    };
+
+    https.get(options, res => {
       let data = '';
       res.on('data', c => data += c);
       res.on('end', () => {
@@ -104,28 +170,42 @@ function makeRequest(method, path, data = null) {
 }
 
 // Send / edit embed
-async function sendOrEditMessage(embed) {
+async function sendOrEditMessage(embed, isSecond = false, pingEveryone = false) {
   try {
-    if (messageId) {
+    const whId = isSecond ? webhookId2 : webhookId;
+    const whToken = isSecond ? webhookToken2 : webhookToken;
+    const msgId = isSecond ? messageId2 : messageId;
+    
+    const payload = { embeds: [embed] };
+    if (pingEveryone) {
+      payload.content = '@everyone';
+    }
+
+    if (msgId) {
       await makeRequest(
         'PATCH',
-        `/api/webhooks/${webhookId}/${webhookToken}/messages/${messageId}`,
-        { embeds: [embed] }
+        `/api/webhooks/${whId}/${whToken}/messages/${msgId}`,
+        payload
       );
     } else {
       const res = await makeRequest(
         'POST',
-        `/api/webhooks/${webhookId}/${webhookToken}?wait=true`,
-        { embeds: [embed] }
+        `/api/webhooks/${whId}/${whToken}?wait=true`,
+        payload
       );
-      saveMessageId(res.id);
+      saveMessageId(res.id, isSecond ? MESSAGE_FILE_2 : MESSAGE_FILE, isSecond);
     }
-  } catch {
-    messageId = null;
+  } catch (e) {
+    if (isSecond) {
+      messageId2 = null;
+    } else {
+      messageId = null;
+    }
+    console.error('❌ Erreur Discord:', e.message);
   }
 }
 
-// 🔥 SELF-PING pour contourner l'inactivité Render
+// Self-ping pour Render
 function selfPing() {
   if (!RENDER_URL) return;
   
@@ -138,7 +218,7 @@ function selfPing() {
   });
 }
 
-// MAIN
+// ==================== SCANNER 1 : WATCH LIST ====================
 async function checkPlayers() {
   try {
     const data = await fetchJSON(DYNMAP_URL);
@@ -191,33 +271,134 @@ async function checkPlayers() {
       timestamp: new Date().toISOString()
     };
 
-    await sendOrEditMessage(embed);
-    console.log(`[${timeStr}] OK ${watchedOnline.length}/${WATCH_LIST.length}`);
+    await sendOrEditMessage(embed, false);
+    console.log(`[${timeStr}] Scanner 1 OK - ${watchedOnline.length}/${WATCH_LIST.length}`);
   } catch (e) {
-    console.error('❌ Erreur:', e.message);
+    console.error('❌ Erreur Scanner 1:', e.message);
   }
 }
 
-// INIT
-parseWebhook();
-loadMessageId();
+// ==================== SCANNER 2 : NATIONS ====================
+async function checkNations() {
+  try {
+    const dynmapData = await fetchJSON(DYNMAP_URL);
+    const onlinePlayers = dynmapData.players.map(p => p.name);
 
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString('fr-FR', {
+      timeZone: 'Europe/Paris',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+
+    let nationsData = {};
+    let totalOnline = 0;
+    let assaultPossible = false;
+
+    // Récupérer les données de chaque nation
+    for (const nation of NATIONS_TO_WATCH) {
+      try {
+        const nationData = await fetchWithAuth(
+          `https://publicapi.nationsglory.fr/country/lime/${nation}`,
+          API_KEY
+        );
+
+        const members = nationData.members || [];
+        const onlineMembers = members.filter(member => {
+          const cleanName = member.replace(/^[*+-]/, '');
+          return onlinePlayers.includes(cleanName);
+        });
+
+        nationsData[nation] = {
+          name: nationData.name || nation,
+          online: onlineMembers,
+          count: onlineMembers.length
+        };
+
+        totalOnline += onlineMembers.length;
+
+        // Vérifier si assaut possible (2+ joueurs)
+        if (onlineMembers.length >= 2) {
+          assaultPossible = true;
+        }
+      } catch (e) {
+        console.error(`⚠️ Erreur récupération ${nation}:`, e.message);
+        nationsData[nation] = {
+          name: nation,
+          online: [],
+          count: 0
+        };
+      }
+    }
+
+    // Construire l'embed
+    let statusText = '';
+    
+    for (const nation of NATIONS_TO_WATCH) {
+      const data = nationsData[nation];
+      const emoji = data.count >= 2 ? '🔴' : data.count === 1 ? '🟡' : '⚪';
+      
+      statusText += `${emoji} **${data.name.toUpperCase()}** : ${data.count} joueur${data.count > 1 ? 's' : ''} connecté${data.count > 1 ? 's' : ''}\n`;
+      
+      if (data.count > 0) {
+        statusText += data.online.map(p => `• ${p.replace(/^[*+-]/, '')}`).join('\n') + '\n';
+      }
+      statusText += '\n';
+    }
+
+    if (assaultPossible) {
+      statusText += '⚠️ **ASSAUT POSSIBLE** ⚠️\n';
+    }
+
+    const embed = {
+      title: "⚔️ SURVEILLANCE NATIONS - LIME",
+      color: assaultPossible ? 15158332 : totalOnline > 0 ? 16776960 : 10197915,
+      fields: [
+        { name: "👥 Total Connectés", value: `**${totalOnline}**`, inline: true },
+        { name: "⏱️ Dernier Relevé", value: `**${timeStr}**`, inline: true },
+        { name: "🎯 Nations Surveillées", value: `**${NATIONS_TO_WATCH.length}**`, inline: true },
+        { name: "📊 Statut des Nations", value: statusText }
+      ],
+      footer: { text: "Scanner Nations 24/7 • Actualisation toutes les 1s" },
+      timestamp: new Date().toISOString()
+    };
+
+    await sendOrEditMessage(embed, true, assaultPossible);
+    console.log(`[${timeStr}] Scanner 2 OK - ${totalOnline} joueurs | Assaut: ${assaultPossible ? 'OUI' : 'NON'}`);
+  } catch (e) {
+    console.error('❌ Erreur Scanner 2:', e.message);
+  }
+}
+
+// ==================== INITIALISATION ====================
+parseWebhook(WEBHOOK_URL, false);
+parseWebhook(WEBHOOK_URL_2, true);
+loadMessageId(MESSAGE_FILE, false);
+loadMessageId(MESSAGE_FILE_2, true);
+
+// Lancer les scanners
 checkPlayers();
-setInterval(checkPlayers, CHECK_INTERVAL);
+checkNations();
 
-// 🔥 Self-ping toutes les 10 minutes (600000ms) pour éviter le sleep de Render
+setInterval(checkPlayers, CHECK_INTERVAL);
+setInterval(checkNations, CHECK_INTERVAL);
+
+// Self-ping toutes les 10 minutes
 if (RENDER_URL) {
   console.log(`🔄 Self-ping activé vers: ${RENDER_URL}`);
-  setInterval(selfPing, 600000); // 10 minutes
+  setInterval(selfPing, 600000);
 }
 
 // Keep alive server
 const server = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('LIME Scanner running ✅');
+  res.end('LIME Double Scanner running ✅');
 });
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`🚀 Serveur démarré sur le port ${PORT}`);
+  console.log('📡 Scanner 1: Surveillance WATCH_LIST');
+  console.log('⚔️ Scanner 2: Surveillance CoreeDuNord + Armenie');
 });
