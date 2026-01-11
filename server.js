@@ -283,23 +283,49 @@ function selfPing() {
   });
 }
 
-// Nettoyer les anciens messages au démarrage
-async function cleanupOldMessages() {
-  console.log('🧹 Nettoyage des anciens messages...');
-  
-  // Scanner 1
-  if (messageId) {
-    await deleteMessage(messageId, false);
-    deleteMessageId(MESSAGE_FILE, false);
+// Récupérer tous les messages du webhook
+async function getAllWebhookMessages(isSecond = false) {
+  try {
+    await waitForRateLimit();
+    
+    const whId = isSecond ? webhookId2 : webhookId;
+    const whToken = isSecond ? webhookToken2 : webhookToken;
+    
+    const res = await makeRequest(
+      'GET',
+      `/api/webhooks/${whId}/${whToken}/messages`
+    );
+    
+    return res || [];
+  } catch (e) {
+    console.error(`⚠️ Erreur récupération messages: ${e.message}`);
+    return [];
   }
+}
+
+// Nettoyer TOUS les messages du webhook au démarrage
+async function cleanupAllMessages() {
+  console.log('🧹 Nettoyage de TOUS les messages des webhooks...');
   
-  // Scanner 2
-  if (messageId2) {
-    await deleteMessage(messageId2, true);
-    deleteMessageId(MESSAGE_FILE_2, true);
+  // Scanner 1 - Supprimer tous les messages
+  const messages1 = await getAllWebhookMessages(false);
+  console.log(`📨 Scanner 1: ${messages1.length} messages trouvés`);
+  for (const msg of messages1) {
+    await deleteMessage(msg.id, false);
+    await new Promise(resolve => setTimeout(resolve, 300)); // Délai entre suppressions
   }
+  deleteMessageId(MESSAGE_FILE, false);
   
-  console.log('✅ Nettoyage terminé');
+  // Scanner 2 - Supprimer tous les messages
+  const messages2 = await getAllWebhookMessages(true);
+  console.log(`📨 Scanner 2: ${messages2.length} messages trouvés`);
+  for (const msg of messages2) {
+    await deleteMessage(msg.id, true);
+    await new Promise(resolve => setTimeout(resolve, 300)); // Délai entre suppressions
+  }
+  deleteMessageId(MESSAGE_FILE_2, true);
+  
+  console.log('✅ Tous les messages ont été supprimés');
 }
 
 // ==================== SCANNER 1 : WATCH LIST ====================
@@ -500,10 +526,14 @@ async function checkNations() {
 async function init() {
   parseWebhook(WEBHOOK_URL, false);
   parseWebhook(WEBHOOK_URL_2, true);
-  loadMessageId(MESSAGE_FILE, false);
-  loadMessageId(MESSAGE_FILE_2, true);
-
-  // Lancer les scanners normalement (ils vont éditer ou créer selon besoin)
+  
+  // Nettoyer TOUS les messages au démarrage
+  await cleanupAllMessages();
+  
+  // Attendre un peu avant de créer les nouveaux
+  await new Promise(resolve => setTimeout(resolve, 2000));
+  
+  // Lancer les scanners (ils vont créer de nouveaux messages)
   await checkPlayers();
   await checkNations();
 
