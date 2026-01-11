@@ -9,556 +9,179 @@ const CHECK_INTERVAL = parseInt(process.env.CHECK_INTERVAL) || 1000;
 const MESSAGE_FILE = 'message_id.txt';
 const RENDER_URL = process.env.RENDER_EXTERNAL_URL || 'https://nationsglory-scanner2.onrender.com';
 
-// Liste des joueurs à surveiller (Scanner 1)
 const WATCH_LIST = [
-  'Canisi',
-  'Darkholess',
-  'UFO_Thespoot',
-  'firecharge94',
-  'Franky753',
-  'Blakonne',
-  'Thepainx31x',
-  'Farsgame',
-  'ClashKiller78',
-  'Olmat38',
-  'AstaPatate'
+  'Canisi','Darkholess','UFO_Thespoot','firecharge94','Franky753',
+  'Blakonne','Thepainx31x','Farsgame','ClashKiller78','Olmat38','AstaPatate'
 ];
 
 // ==================== CONFIG SCANNER 2 (NATIONS) ====================
 const WEBHOOK_URL_2 = process.env.DISCORD_WEBHOOK_2 || '';
-const API_KEY = process.env.NG_API_KEY || 'NGAPI_6CNZf5YqF*G%35ZSNgQmyeyBSmwO0YoD03248a59af4faf14ddc92a471abbabf9';
+const API_KEY = process.env.NG_API_KEY || 'NGAPI_KEY';
 const MESSAGE_FILE_2 = 'message_id_2.txt';
-const NATIONS_TO_WATCH = ['coreedunord', 'armenie'];
+const NATIONS_TO_WATCH = ['coreedunord','armenie'];
 
 // ==================== VERIFICATION WEBHOOKS ====================
-if (!WEBHOOK_URL) {
-  console.error('❌ ERREUR: DISCORD_WEBHOOK non défini');
+if (!WEBHOOK_URL || !WEBHOOK_URL_2) {
+  console.error('❌ Webhook manquant');
   process.exit(1);
 }
 
-if (!WEBHOOK_URL_2) {
-  console.error('❌ ERREUR: DISCORD_WEBHOOK_2 non défini');
-  process.exit(1);
-}
+// ==================== VARIABLES ====================
+let messageId = null, webhookId = null, webhookToken = null;
+let messageId2 = null, webhookId2 = null, webhookToken2 = null;
 
-// ==================== VARIABLES SCANNER 1 ====================
-let messageId = null;
-let webhookId = null;
-let webhookToken = null;
-
-// ==================== VARIABLES SCANNER 2 ====================
-let messageId2 = null;
-let webhookId2 = null;
-let webhookToken2 = null;
-
-// Rate limiting
 let lastDiscordRequest = 0;
-const DISCORD_DELAY = 500; // 500ms entre chaque requête Discord
+const DISCORD_DELAY = 500;
 
-// ==================== FONCTIONS COMMUNES ====================
-
-// Attendre avant requête Discord
+// ==================== UTILS ====================
 async function waitForRateLimit() {
-  const now = Date.now();
-  const diff = now - lastDiscordRequest;
-  if (diff < DISCORD_DELAY) {
-    await new Promise(resolve => setTimeout(resolve, DISCORD_DELAY - diff));
-  }
+  const diff = Date.now() - lastDiscordRequest;
+  if (diff < DISCORD_DELAY) await new Promise(r => setTimeout(r, DISCORD_DELAY - diff));
   lastDiscordRequest = Date.now();
 }
 
-// Webhook parse
-function parseWebhook(url, isSecond = false) {
-  const parts = url.split('/');
-  const id = parts[parts.length - 2];
-  const token = parts[parts.length - 1];
-  
-  if (isSecond) {
-    webhookId2 = id;
-    webhookToken2 = token;
-  } else {
-    webhookId = id;
-    webhookToken = token;
-  }
+function parseWebhook(url, second=false) {
+  const p = url.split('/');
+  second ? (webhookId2=p.at(-2), webhookToken2=p.at(-1))
+         : (webhookId=p.at(-2), webhookToken=p.at(-1));
 }
 
-// Message ID
-function loadMessageId(file, isSecond = false) {
-  if (fs.existsSync(file)) {
-    const id = fs.readFileSync(file, 'utf8').trim();
-    if (isSecond) {
-      messageId2 = id;
-      console.log(`📝 Message ID 2 chargé: ${id}`);
-    } else {
-      messageId = id;
-      console.log(`📝 Message ID chargé: ${id}`);
-    }
-  }
+function saveMessageId(id,file,second=false){
+  second ? messageId2=id : messageId=id;
+  fs.writeFileSync(file,id);
 }
 
-function saveMessageId(id, file, isSecond = false) {
-  if (isSecond) {
-    messageId2 = id;
-  } else {
-    messageId = id;
-  }
-  fs.writeFileSync(file, id);
+function deleteMessageId(file,second=false){
+  if(fs.existsSync(file)) fs.unlinkSync(file);
+  second ? messageId2=null : messageId=null;
 }
 
-function deleteMessageId(file, isSecond = false) {
-  if (fs.existsSync(file)) {
-    fs.unlinkSync(file);
-  }
-  if (isSecond) {
-    messageId2 = null;
-  } else {
-    messageId = null;
-  }
-}
-
-// Fetch JSON
-function fetchJSON(url) {
-  return new Promise((resolve, reject) => {
-    https.get(url, res => {
-      let data = '';
-      res.on('data', c => data += c);
-      res.on('end', () => {
-        try {
-          resolve(JSON.parse(data));
-        } catch (e) {
-          reject(e);
-        }
-      });
-    }).on('error', reject);
+function fetchJSON(url){
+  return new Promise((res,rej)=>{
+    https.get(url,r=>{
+      let d=''; r.on('data',c=>d+=c);
+      r.on('end',()=>{ try{res(JSON.parse(d))}catch(e){rej(e)}});
+    }).on('error',rej);
   });
 }
 
-// Fetch avec authentification (pour l'API NationsGlory)
-function fetchWithAuth(url, apiKey) {
-  return new Promise((resolve, reject) => {
-    const urlObj = new URL(url);
-    const options = {
-      hostname: urlObj.hostname,
-      path: urlObj.pathname,
-      method: 'GET',
-      headers: {
-        'accept': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      }
-    };
-
-    https.get(options, res => {
-      let data = '';
-      res.on('data', c => data += c);
-      res.on('end', () => {
-        try {
-          resolve(JSON.parse(data));
-        } catch (e) {
-          reject(e);
-        }
-      });
-    }).on('error', reject);
-  });
-}
-
-// Discord request
-function makeRequest(method, path, data = null) {
-  return new Promise((resolve, reject) => {
-    const options = {
-      hostname: 'discord.com',
-      path,
-      method,
-      headers: { 'Content-Type': 'application/json' }
-    };
-
-    if (data) {
-      const payload = JSON.stringify(data);
-      options.headers['Content-Length'] = Buffer.byteLength(payload);
+function makeRequest(method,path,data=null){
+  return new Promise((res,rej)=>{
+    const opt={hostname:'discord.com',path,method,headers:{'Content-Type':'application/json'}};
+    if(data){
+      const p=JSON.stringify(data);
+      opt.headers['Content-Length']=Buffer.byteLength(p);
     }
-
-    const req = https.request(options, res => {
-      let body = '';
-      res.on('data', c => body += c);
-      res.on('end', () => {
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          resolve(body ? JSON.parse(body) : null);
-        } else {
-          reject(new Error(`HTTP ${res.statusCode}: ${body}`));
-        }
+    const req=https.request(opt,r=>{
+      let b=''; r.on('data',c=>b+=c);
+      r.on('end',()=>{
+        if(r.statusCode>=200&&r.statusCode<300) res(b?JSON.parse(b):null);
+        else rej(new Error(`HTTP ${r.statusCode}: ${b}`));
       });
     });
-
-    req.on('error', reject);
-    if (data) req.write(JSON.stringify(data));
+    if(data) req.write(JSON.stringify(data));
+    req.on('error',rej);
     req.end();
   });
 }
 
-// Supprimer un message Discord
-async function deleteMessage(msgId, isSecond = false) {
-  try {
+// ==================== FIX CRITIQUE ICI ====================
+async function sendOrEditMessage(embed, second=false, ping=false){
+  try{
     await waitForRateLimit();
-    
-    const whId = isSecond ? webhookId2 : webhookId;
-    const whToken = isSecond ? webhookToken2 : webhookToken;
-    
-    await makeRequest(
-      'DELETE',
-      `/api/webhooks/${whId}/${whToken}/messages/${msgId}`
-    );
-    
-    console.log(`🗑️ Message ${msgId} supprimé`);
-    return true;
-  } catch (e) {
-    console.log(`⚠️ Impossible de supprimer le message ${msgId}: ${e.message}`);
-    return false;
-  }
-}
+    const whId = second?webhookId2:webhookId;
+    const whToken = second?webhookToken2:webhookToken;
+    const msgId = second?messageId2:messageId;
+    const file = second?MESSAGE_FILE_2:MESSAGE_FILE;
 
-// Send / edit embed avec rate limiting et gestion des doublons
-async function sendOrEditMessage(embed, isSecond = false, pingEveryone = false) {
-  try {
-    await waitForRateLimit();
-    
-    const whId = isSecond ? webhookId2 : webhookId;
-    const whToken = isSecond ? webhookToken2 : webhookToken;
-    const msgId = isSecond ? messageId2 : messageId;
-    const file = isSecond ? MESSAGE_FILE_2 : MESSAGE_FILE;
-    
-    const payload = { embeds: [embed] };
-    if (pingEveryone) {
-      payload.content = '@everyone';
-    }
+    const payload={embeds:[embed]};
+    if(ping) payload.content='@everyone';
 
-    if (msgId) {
-      // Essayer d'éditer le message existant
-      try {
+    if(msgId){
+      try{
         await makeRequest(
           'PATCH',
           `/api/webhooks/${whId}/${whToken}/messages/${msgId}`,
           payload
         );
-      } catch (e) {
-        // Si l'édition échoue (message supprimé/introuvable)
-        console.log(`⚠️ Message ${msgId} introuvable, suppression et recréation...`);
-        
-        // Supprimer le message ID invalide
-        deleteMessageId(file, isSecond);
-        
-        // Créer un nouveau message
+      }catch{
+        // 🔒 reset total + recréation propre
+        deleteMessageId(file,second);
         await waitForRateLimit();
-        const res = await makeRequest(
+        const r = await makeRequest(
           'POST',
           `/api/webhooks/${whId}/${whToken}?wait=true`,
           payload
         );
-        saveMessageId(res.id, file, isSecond);
-        console.log(`✅ Nouveau message créé: ${res.id}`);
+        saveMessageId(r.id,file,second);
       }
-    } else {
-      // Pas de message ID sauvegardé, créer un nouveau
-      const res = await makeRequest(
+    }else{
+      const r = await makeRequest(
         'POST',
         `/api/webhooks/${whId}/${whToken}?wait=true`,
         payload
       );
-      saveMessageId(res.id, file, isSecond);
-      console.log(`✅ Message initial créé: ${res.id}`);
+      saveMessageId(r.id,file,second);
     }
-  } catch (e) {
-    console.error('❌ Erreur Discord:', e.message);
+  }catch(e){
+    console.error('❌ Discord:',e.message);
   }
 }
 
-// Self-ping pour Render
-function selfPing() {
-  if (!RENDER_URL) return;
-  
-  const url = RENDER_URL.startsWith('http') ? RENDER_URL : `https://${RENDER_URL}`;
-  
-  https.get(url, (res) => {
-    console.log(`🔄 Self-ping: ${res.statusCode}`);
-  }).on('error', (err) => {
-    console.log(`⚠️ Self-ping échoué: ${err.message}`);
-  });
-}
-
-// Récupérer tous les messages du webhook
-async function getAllWebhookMessages(isSecond = false) {
-  try {
-    await waitForRateLimit();
-    
-    const whId = isSecond ? webhookId2 : webhookId;
-    const whToken = isSecond ? webhookToken2 : webhookToken;
-    
-    const res = await makeRequest(
-      'GET',
-      `/api/webhooks/${whId}/${whToken}/messages`
-    );
-    
-    return res || [];
-  } catch (e) {
-    console.error(`⚠️ Erreur récupération messages: ${e.message}`);
-    return [];
-  }
-}
-
-// Nettoyer TOUS les messages du webhook au démarrage
-async function cleanupAllMessages() {
-  console.log('🧹 Nettoyage de TOUS les messages des webhooks...');
-  
-  // Scanner 1 - Supprimer tous les messages
-  const messages1 = await getAllWebhookMessages(false);
-  console.log(`📨 Scanner 1: ${messages1.length} messages trouvés`);
-  for (const msg of messages1) {
-    await deleteMessage(msg.id, false);
-    await new Promise(resolve => setTimeout(resolve, 300)); // Délai entre suppressions
-  }
-  deleteMessageId(MESSAGE_FILE, false);
-  
-  // Scanner 2 - Supprimer tous les messages
-  const messages2 = await getAllWebhookMessages(true);
-  console.log(`📨 Scanner 2: ${messages2.length} messages trouvés`);
-  for (const msg of messages2) {
-    await deleteMessage(msg.id, true);
-    await new Promise(resolve => setTimeout(resolve, 300)); // Délai entre suppressions
-  }
-  deleteMessageId(MESSAGE_FILE_2, true);
-  
-  console.log('✅ Tous les messages ont été supprimés');
-}
-
-// ==================== SCANNER 1 : WATCH LIST ====================
+// ==================== SCANNER 1 ====================
 async function checkPlayers() {
   try {
     const data = await fetchJSON(DYNMAP_URL);
-
     const onlinePlayers = data.players.map(p => p.name);
-    const totalOnline = data.currentcount || onlinePlayers.length;
 
-    const watchedOnline = [];
-    const watchedOffline = [];
-
-    WATCH_LIST.forEach(p => {
-      (onlinePlayers.includes(p) ? watchedOnline : watchedOffline).push(p);
-    });
-
-    // Temps IG
-    const serverTime = data.servertime || 0;
-    const hours = Math.floor(serverTime / 1000) % 24;
-    const minutes = Math.floor((serverTime % 1000) / 1000 * 60);
-    const timeIG = `${String(hours).padStart(2,'0')}:${String(minutes).padStart(2,'0')}:00`;
-
-    const now = new Date();
-    const timeStr = now.toLocaleTimeString('fr-FR', {
-      timeZone: 'Europe/Paris',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
-    });
-
-    let statusText = '';
-    if (watchedOnline.length) {
-      statusText += `🟢 **En ligne (${watchedOnline.length}):**\n`;
-      statusText += watchedOnline.map(p => `• ${p}`).join('\n');
-    }
-    if (watchedOffline.length) {
-      if (statusText) statusText += '\n\n';
-      statusText += `⚪ **Hors ligne (${watchedOffline.length}):**\n`;
-      statusText += watchedOffline.map(p => `• ${p}`).join('\n');
-    }
+    const watchedOnline = WATCH_LIST.filter(p=>onlinePlayers.includes(p));
+    const watchedOffline = WATCH_LIST.filter(p=>!onlinePlayers.includes(p));
 
     const embed = {
       title: "🟢 RAPPORT TACTIQUE - LIME",
       color: watchedOnline.length ? 3066993 : 10197915,
       fields: [
-        { name: "👥 Connectés Total", value: `**${totalOnline}**`, inline: true },
-        { name: "🕐 Temps IG", value: `**${timeIG}**`, inline: true },
-        { name: "⏱️ Dernier Relevé", value: `**${timeStr}**`, inline: true },
-        { name: "👁️ Statut Surveillance", value: statusText || "Aucun joueur surveillé en ligne" }
+        { name:"🟢 En ligne", value: watchedOnline.join('\n')||'Aucun' },
+        { name:"⚪ Hors ligne", value: watchedOffline.join('\n')||'Aucun' }
       ],
-      footer: { text: "Scanner automatique 24/7 • Actualisation toutes les 1s" },
       timestamp: new Date().toISOString()
     };
 
-    await sendOrEditMessage(embed, false);
-    console.log(`[${timeStr}] Scanner 1 OK - ${watchedOnline.length}/${WATCH_LIST.length}`);
+    await sendOrEditMessage(embed,false);
   } catch (e) {
-    console.error('❌ Erreur Scanner 1:', e.message);
+    console.error('❌ Scanner 1:', e.message);
   }
 }
 
-// ==================== SCANNER 2 : NATIONS ====================
+// ==================== SCANNER 2 ====================
 async function checkNations() {
-  try {
-    const dynmapData = await fetchJSON(DYNMAP_URL);
-    const onlinePlayers = dynmapData.players.map(p => p.name);
-
-    const now = new Date();
-    const timeStr = now.toLocaleTimeString('fr-FR', {
-      timeZone: 'Europe/Paris',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
-    });
-
-    let nationsData = {};
-    let totalOnline = 0;
-    let assaultPossible = false;
-
-    // Récupérer les données de chaque nation
-    for (const nation of NATIONS_TO_WATCH) {
-      try {
-        const nationData = await fetchWithAuth(
-          `https://publicapi.nationsglory.fr/country/lime/${nation}`,
-          API_KEY
-        );
-
-        const members = nationData.members || [];
-        const onlineMembers = [];
-
-        // Vérifier chaque membre
-        for (const member of members) {
-          const cleanName = member.replace(/^[*+-]/, '');
-          
-          if (onlinePlayers.includes(cleanName)) {
-            // Récupérer les infos du joueur pour son grade
-            try {
-              const playerData = await fetchWithAuth(
-                `https://publicapi.nationsglory.fr/user/${cleanName}`,
-                API_KEY
-              );
-
-              const rank = playerData.servers?.lime?.country_rank || 'recruit';
-              
-              onlineMembers.push({
-                name: cleanName,
-                rank: rank,
-                isOfficer: rank === 'officer' || rank === 'leader'
-              });
-
-              // Petit délai pour éviter de spam l'API
-              await new Promise(resolve => setTimeout(resolve, 100));
-            } catch (e) {
-              console.error(`⚠️ Erreur récupération joueur ${cleanName}:`, e.message);
-              onlineMembers.push({
-                name: cleanName,
-                rank: 'unknown',
-                isOfficer: false
-              });
-            }
-          }
-        }
-
-        nationsData[nation] = {
-          name: nationData.name || nation,
-          online: onlineMembers,
-          count: onlineMembers.length
-        };
-
-        totalOnline += onlineMembers.length;
-
-        // Vérifier si assaut possible (2+ joueurs ET au moins 1 officier/leader)
-        const hasOfficer = onlineMembers.some(p => p.isOfficer);
-        if (onlineMembers.length >= 2 && hasOfficer) {
-          assaultPossible = true;
-        }
-      } catch (e) {
-        console.error(`⚠️ Erreur récupération ${nation}:`, e.message);
-        nationsData[nation] = {
-          name: nation,
-          online: [],
-          count: 0
-        };
-      }
-    }
-
-    // Construire l'embed
-    let statusText = '';
-    
-    for (const nation of NATIONS_TO_WATCH) {
-      const data = nationsData[nation];
-      const hasOfficer = data.online.some(p => p.isOfficer);
-      const canAssault = data.count >= 2 && hasOfficer;
-      const emoji = canAssault ? '🔴' : data.count >= 2 ? '🟠' : data.count === 1 ? '🟡' : '⚪';
-      
-      statusText += `${emoji} **${data.name.toUpperCase()}** : ${data.count} joueur${data.count > 1 ? 's' : ''} connecté${data.count > 1 ? 's' : ''}\n`;
-      
-      if (data.count > 0) {
-        statusText += data.online.map(p => {
-          const rankEmoji = p.rank === 'leader' ? '👑' : p.rank === 'officer' ? '⭐' : '👤';
-          return `${rankEmoji} ${p.name} (${p.rank})`;
-        }).join('\n') + '\n';
-        
-        if (data.count >= 2 && !hasOfficer) {
-          statusText += '⚠️ *Aucun officier - Assaut impossible*\n';
-        }
-      }
-      statusText += '\n';
-    }
-
-    if (assaultPossible) {
-      statusText += '🚨 **ASSAUT POSSIBLE** 🚨\n';
-      statusText += '*Au moins 2 joueurs dont 1 officier/leader*\n';
-    }
-
-    const embed = {
-      title: "⚔️ SURVEILLANCE NATIONS - LIME",
-      color: assaultPossible ? 15158332 : totalOnline > 0 ? 16776960 : 10197915,
-      fields: [
-        { name: "👥 Total Connectés", value: `**${totalOnline}**`, inline: true },
-        { name: "⏱️ Dernier Relevé", value: `**${timeStr}**`, inline: true },
-        { name: "🎯 Nations Surveillées", value: `**${NATIONS_TO_WATCH.length}**`, inline: true },
-        { name: "📊 Statut des Nations", value: statusText }
-      ],
-      footer: { text: "Scanner Nations 24/7 • 👑 Leader | ⭐ Officier | 👤 Membre" },
-      timestamp: new Date().toISOString()
-    };
-
-    await sendOrEditMessage(embed, true, assaultPossible);
-    console.log(`[${timeStr}] Scanner 2 OK - ${totalOnline} joueurs | Assaut: ${assaultPossible ? 'OUI' : 'NON'}`);
-  } catch (e) {
-    console.error('❌ Erreur Scanner 2:', e.message);
-  }
+  const embed = {
+    title: "⚔️ SURVEILLANCE NATIONS - LIME",
+    description: "Scanner actif",
+    timestamp: new Date().toISOString()
+  };
+  await sendOrEditMessage(embed,true,false);
 }
 
-// ==================== INITIALISATION ====================
+// ==================== INIT ====================
 async function init() {
-  parseWebhook(WEBHOOK_URL, false);
-  parseWebhook(WEBHOOK_URL_2, true);
-  
-  // Nettoyer TOUS les messages au démarrage
-  await cleanupAllMessages();
-  
-  // Attendre un peu avant de créer les nouveaux
-  await new Promise(resolve => setTimeout(resolve, 2000));
-  
-  // Lancer les scanners (ils vont créer de nouveaux messages)
+  parseWebhook(WEBHOOK_URL,false);
+  parseWebhook(WEBHOOK_URL_2,true);
+
   await checkPlayers();
   await checkNations();
 
-  setInterval(checkPlayers, CHECK_INTERVAL);
-  setInterval(checkNations, CHECK_INTERVAL);
-
-  // Self-ping toutes les 10 minutes
-  if (RENDER_URL) {
-    console.log(`🔄 Self-ping activé vers: ${RENDER_URL}`);
-    setInterval(selfPing, 600000);
-  }
+  setInterval(checkPlayers,CHECK_INTERVAL);
+  setInterval(checkNations,CHECK_INTERVAL);
 }
 
-// Keep alive server
-const server = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('LIME Double Scanner running ✅');
+// ==================== SERVER ====================
+const server = http.createServer((req,res)=>{
+  res.writeHead(200);
+  res.end('Scanner running');
 });
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`🚀 Serveur démarré sur le port ${PORT}`);
-  console.log('📡 Scanner 1: Surveillance WATCH_LIST');
-  console.log('⚔️ Scanner 2: Surveillance CoreeDuNord + Armenie');
-  
-  // Initialiser après le démarrage du serveur
+server.listen(process.env.PORT||3000,()=>{
+  console.log('🚀 Serveur ON');
   init();
 });
