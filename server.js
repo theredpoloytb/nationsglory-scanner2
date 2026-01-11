@@ -503,13 +503,7 @@ async function init() {
   loadMessageId(MESSAGE_FILE, false);
   loadMessageId(MESSAGE_FILE_2, true);
 
-  // Nettoyer les anciens messages au démarrage
-  await cleanupOldMessages();
-
-  // Attendre un peu avant de créer les nouveaux messages
-  await new Promise(resolve => setTimeout(resolve, 1000));
-
-  // Lancer les scanners
+  // Lancer les scanners normalement (ils vont éditer ou créer selon besoin)
   await checkPlayers();
   await checkNations();
 
