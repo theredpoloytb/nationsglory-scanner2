@@ -105,6 +105,17 @@ function saveMessageId(id, file, isSecond = false) {
   fs.writeFileSync(file, id);
 }
 
+function deleteMessageId(file, isSecond = false) {
+  if (fs.existsSync(file)) {
+    fs.unlinkSync(file);
+  }
+  if (isSecond) {
+    messageId2 = null;
+  } else {
+    messageId = null;
+  }
+}
+
 // Fetch JSON
 function fetchJSON(url) {
   return new Promise((resolve, reject) => {
@@ -183,7 +194,28 @@ function makeRequest(method, path, data = null) {
   });
 }
 
-// Send / edit embed avec rate limiting
+// Supprimer un message Discord
+async function deleteMessage(msgId, isSecond = false) {
+  try {
+    await waitForRateLimit();
+    
+    const whId = isSecond ? webhookId2 : webhookId;
+    const whToken = isSecond ? webhookToken2 : webhookToken;
+    
+    await makeRequest(
+      'DELETE',
+      `/api/webhooks/${whId}/${whToken}/messages/${msgId}`
+    );
+    
+    console.log(`🗑️ Message ${msgId} supprimé`);
+    return true;
+  } catch (e) {
+    console.log(`⚠️ Impossible de supprimer le message ${msgId}: ${e.message}`);
+    return false;
+  }
+}
+
+// Send / edit embed avec rate limiting et gestion des doublons
 async function sendOrEditMessage(embed, isSecond = false, pingEveryone = false) {
   try {
     await waitForRateLimit();
@@ -191,6 +223,7 @@ async function sendOrEditMessage(embed, isSecond = false, pingEveryone = false) 
     const whId = isSecond ? webhookId2 : webhookId;
     const whToken = isSecond ? webhookToken2 : webhookToken;
     const msgId = isSecond ? messageId2 : messageId;
+    const file = isSecond ? MESSAGE_FILE_2 : MESSAGE_FILE;
     
     const payload = { embeds: [embed] };
     if (pingEveryone) {
@@ -206,30 +239,31 @@ async function sendOrEditMessage(embed, isSecond = false, pingEveryone = false) 
           payload
         );
       } catch (e) {
-        // Si l'édition échoue (message supprimé), créer un nouveau
-        console.log(`⚠️ Message ${msgId} introuvable, création d'un nouveau...`);
-        if (isSecond) {
-          messageId2 = null;
-        } else {
-          messageId = null;
-        }
+        // Si l'édition échoue (message supprimé/introuvable)
+        console.log(`⚠️ Message ${msgId} introuvable, suppression et recréation...`);
         
+        // Supprimer le message ID invalide
+        deleteMessageId(file, isSecond);
+        
+        // Créer un nouveau message
         await waitForRateLimit();
         const res = await makeRequest(
           'POST',
           `/api/webhooks/${whId}/${whToken}?wait=true`,
           payload
         );
-        saveMessageId(res.id, isSecond ? MESSAGE_FILE_2 : MESSAGE_FILE, isSecond);
+        saveMessageId(res.id, file, isSecond);
+        console.log(`✅ Nouveau message créé: ${res.id}`);
       }
     } else {
-      // Créer un nouveau message
+      // Pas de message ID sauvegardé, créer un nouveau
       const res = await makeRequest(
         'POST',
         `/api/webhooks/${whId}/${whToken}?wait=true`,
         payload
       );
-      saveMessageId(res.id, isSecond ? MESSAGE_FILE_2 : MESSAGE_FILE, isSecond);
+      saveMessageId(res.id, file, isSecond);
+      console.log(`✅ Message initial créé: ${res.id}`);
     }
   } catch (e) {
     console.error('❌ Erreur Discord:', e.message);
@@ -247,6 +281,25 @@ function selfPing() {
   }).on('error', (err) => {
     console.log(`⚠️ Self-ping échoué: ${err.message}`);
   });
+}
+
+// Nettoyer les anciens messages au démarrage
+async function cleanupOldMessages() {
+  console.log('🧹 Nettoyage des anciens messages...');
+  
+  // Scanner 1
+  if (messageId) {
+    await deleteMessage(messageId, false);
+    deleteMessageId(MESSAGE_FILE, false);
+  }
+  
+  // Scanner 2
+  if (messageId2) {
+    await deleteMessage(messageId2, true);
+    deleteMessageId(MESSAGE_FILE_2, true);
+  }
+  
+  console.log('✅ Nettoyage terminé');
 }
 
 // ==================== SCANNER 1 : WATCH LIST ====================
@@ -444,22 +497,30 @@ async function checkNations() {
 }
 
 // ==================== INITIALISATION ====================
-parseWebhook(WEBHOOK_URL, false);
-parseWebhook(WEBHOOK_URL_2, true);
-loadMessageId(MESSAGE_FILE, false);
-loadMessageId(MESSAGE_FILE_2, true);
+async function init() {
+  parseWebhook(WEBHOOK_URL, false);
+  parseWebhook(WEBHOOK_URL_2, true);
+  loadMessageId(MESSAGE_FILE, false);
+  loadMessageId(MESSAGE_FILE_2, true);
 
-// Lancer les scanners
-checkPlayers();
-checkNations();
+  // Nettoyer les anciens messages au démarrage
+  await cleanupOldMessages();
 
-setInterval(checkPlayers, CHECK_INTERVAL);
-setInterval(checkNations, CHECK_INTERVAL);
+  // Attendre un peu avant de créer les nouveaux messages
+  await new Promise(resolve => setTimeout(resolve, 1000));
 
-// Self-ping toutes les 10 minutes
-if (RENDER_URL) {
-  console.log(`🔄 Self-ping activé vers: ${RENDER_URL}`);
-  setInterval(selfPing, 600000);
+  // Lancer les scanners
+  await checkPlayers();
+  await checkNations();
+
+  setInterval(checkPlayers, CHECK_INTERVAL);
+  setInterval(checkNations, CHECK_INTERVAL);
+
+  // Self-ping toutes les 10 minutes
+  if (RENDER_URL) {
+    console.log(`🔄 Self-ping activé vers: ${RENDER_URL}`);
+    setInterval(selfPing, 600000);
+  }
 }
 
 // Keep alive server
@@ -473,4 +534,7 @@ server.listen(PORT, () => {
   console.log(`🚀 Serveur démarré sur le port ${PORT}`);
   console.log('📡 Scanner 1: Surveillance WATCH_LIST');
   console.log('⚔️ Scanner 2: Surveillance CoreeDuNord + Armenie');
+  
+  // Initialiser après le démarrage du serveur
+  init();
 });
