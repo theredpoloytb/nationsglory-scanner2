@@ -198,7 +198,7 @@ async function sendOrEditMessage(embed, isSecond = false, pingEveryone = false) 
       try {
         await makeRequest(
           'PATCH',
-          `/api/webhooks/\( {whId}/ \){whToken}/messages/${msgId}`,
+          `/api/webhooks/${whId}/${whToken}/messages/${msgId}`,
           payload
         );
       } catch (e) {
@@ -212,7 +212,7 @@ async function sendOrEditMessage(embed, isSecond = false, pingEveryone = false) 
         await waitForRateLimit();
         const res = await makeRequest(
           'POST',
-          `/api/webhooks/\( {whId}/ \){whToken}?wait=true`,
+          `/api/webhooks/${whId}/${whToken}?wait=true`,
           payload
         );
         saveMessageId(res.id, isSecond ? MESSAGE_FILE_2 : MESSAGE_FILE, isSecond);
@@ -220,7 +220,7 @@ async function sendOrEditMessage(embed, isSecond = false, pingEveryone = false) 
     } else {
       const res = await makeRequest(
         'POST',
-        `/api/webhooks/\( {whId}/ \){whToken}?wait=true`,
+        `/api/webhooks/${whId}/${whToken}?wait=true`,
         payload
       );
       saveMessageId(res.id, isSecond ? MESSAGE_FILE_2 : MESSAGE_FILE, isSecond);
@@ -315,7 +315,7 @@ async function checkPlayers() {
     const serverTime = data.servertime || 0;
     const hours = Math.floor(serverTime / 1000) % 24;
     const minutes = Math.floor((serverTime % 1000) / 1000 * 60);
-    const timeIG = `\( {String(hours).padStart(2,'0')}: \){String(minutes).padStart(2,'0')}:00`;
+    const timeIG = `${String(hours).padStart(2,'0')}:${String(minutes).padStart(2,'0')}:00`;
 
     const now = new Date();
     const timeStr = now.toLocaleTimeString('fr-FR', {
@@ -350,7 +350,7 @@ async function checkPlayers() {
     };
 
     await sendOrEditMessage(embed, false);
-    console.log(`[${timeStr}] Scanner 1 OK - \( {watchedOnline.length}/ \){WATCH_LIST.length}`);
+    console.log(`[${timeStr}] Scanner 1 OK - ${watchedOnline.length}/${WATCH_LIST.length}`);
   } catch (e) {
     console.error('❌ Erreur Scanner 1:', e.message);
   }
@@ -436,12 +436,12 @@ async function checkNations() {
       const canAssault = data.count >= 2 && hasAssaulter;
       const emoji = canAssault ? '🔴' : data.count >= 2 ? '🟠' : data.count === 1 ? '🟡' : '⚪';
       
-      statusText += `\( {emoji} ** \){data.name.toUpperCase()}** : \( {data.count} joueur \){data.count > 1 ? 's' : ''} connecté${data.count > 1 ? 's' : ''}\n`;
+      statusText += `${emoji} **${data.name.toUpperCase()}** : ${data.count} joueur${data.count > 1 ? 's' : ''} connecté${data.count > 1 ? 's' : ''}\n`;
       
       if (data.count > 0) {
         statusText += data.online.map(p => {
           const rankEmoji = p.rank === 'leader' ? '👑' : p.rank === 'officer' ? '⭐' : p.rank === 'member' ? '👤' : '🆕';
-          return `${rankEmoji} \( {p.name} ( \){p.rank})`;
+          return `${rankEmoji} ${p.name} (${p.rank})`;
         }).join('\n') + '\n';
         
         if (data.count >= 2 && !hasAssaulter) {
