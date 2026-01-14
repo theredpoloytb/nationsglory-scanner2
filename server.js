@@ -58,10 +58,6 @@ function loadStats() {
     if (!playerStats[p]) {
       playerStats[p] = {
         sessions: [],
-        totalTime: 0,
-        connectionsByHour: Array(24).fill(0),
-        connectionsByDay: Array(7).fill(0),
-        lastSeen: null,
         currentSession: null
       };
     }
@@ -88,8 +84,6 @@ function updatePlayerStats(player, isOnline) {
       startHour: date.getHours(),
       startDay: date.getDay()
     };
-    stats.connectionsByHour[date.getHours()]++;
-    stats.connectionsByDay[date.getDay()]++;
     console.log(`📥 ${player} connecté à ${date.getHours()}h`);
     
   } else if (!isOnline && stats.currentSession) {
@@ -100,10 +94,10 @@ function updatePlayerStats(player, isOnline) {
       end: now,
       duration: duration,
       startHour: stats.currentSession.startHour,
-      startDay: stats.currentSession.startDay
+      startDay: stats.currentSession.startDay,
+      endHour: new Date(now).getHours(),
+      endDay: new Date(now).getDay()
     });
-    stats.totalTime += duration;
-    stats.lastSeen = now;
     stats.currentSession = null;
     
     // Garder seulement les 100 dernières sessions
@@ -111,7 +105,7 @@ function updatePlayerStats(player, isOnline) {
       stats.sessions = stats.sessions.slice(-100);
     }
     
-    console.log(`📤 ${player} déconnecté après ${formatDuration(duration)}`);
+    console.log(`📤 ${player} déconnecté`);
     saveStats();
   }
 }
@@ -123,32 +117,9 @@ function formatDuration(ms) {
   return `${minutes}m`;
 }
 
-function getAverageSessionTime(player) {
-  const stats = playerStats[player];
-  if (stats.sessions.length === 0) return 0;
-  
-  const total = stats.sessions.reduce((sum, s) => sum + s.duration, 0);
-  return total / stats.sessions.length;
-}
-
-function getPeakHours(player) {
-  const stats = playerStats[player];
-  const counts = [...stats.connectionsByHour];
-  
-  // Trouver les 3 heures les plus fréquentes
-  const peaks = counts
-    .map((count, hour) => ({ hour, count }))
-    .filter(x => x.count > 0)
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 3);
-  
-  return peaks;
-}
-
 function predictNextConnection(player) {
   const stats = playerStats[player];
   const now = new Date();
-  const currentHour = now.getHours();
   const currentDay = now.getDay();
   
   if (stats.sessions.length < 5) return null;
@@ -179,54 +150,50 @@ function predictNextConnection(player) {
   );
   
   return {
-    day: currentDay,
     hour: avgHour,
     confidence: Math.min(100, (todayStats.count / recentSessions.length) * 100)
   };
 }
 
-function getWeeklyTrend(player) {
+function predictDisconnection(player) {
   const stats = playerStats[player];
-  const days = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
   
-  return stats.connectionsByDay
-    .map((count, i) => `${days[i]}: ${count}`)
-    .join(' | ');
-}
-
-function generateStatsEmbed(player) {
-  const stats = playerStats[player];
-  const avgSession = formatDuration(getAverageSessionTime(player));
-  const totalTime = formatDuration(stats.totalTime);
-  const peaks = getPeakHours(player);
-  const prediction = predictNextConnection(player);
+  if (!stats.currentSession || stats.sessions.length < 5) return null;
   
-  let peaksText = peaks.length > 0 
-    ? peaks.map(p => `${p.hour}h (${p.count}x)`).join(', ')
-    : 'Pas assez de données';
+  // Sessions des 7 derniers jours
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const recentSessions = stats.sessions.filter(s => s.start > weekAgo);
   
-  let predictionText = 'Calcul en cours...';
-  if (prediction && stats.sessions.length >= 5) {
-    const days = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
-    const confidence = Math.round(prediction.confidence);
-    predictionText = `${days[prediction.day]} vers ${prediction.hour}h (${confidence}% confiance)`;
-  } else if (stats.sessions.length < 5) {
-    predictionText = 'Minimum 5 sessions requises';
-  }
+  if (recentSessions.length === 0) return null;
+  
+  const now = new Date();
+  const currentHour = now.getHours();
+  
+  // Filtrer les sessions qui ont commencé à une heure similaire (+/- 2h)
+  const similarSessions = recentSessions.filter(s => {
+    const diff = Math.abs(s.startHour - currentHour);
+    return diff <= 2 || diff >= 22; // Gère le passage minuit
+  });
+  
+  if (similarSessions.length === 0) return null;
+  
+  // Durée moyenne des sessions similaires
+  const avgDuration = similarSessions.reduce((sum, s) => sum + s.duration, 0) / similarSessions.length;
+  
+  // Temps écoulé depuis la connexion
+  const elapsed = Date.now() - stats.currentSession.start;
+  
+  // Temps restant estimé
+  const remaining = avgDuration - elapsed;
+  
+  if (remaining < 0) return null;
+  
+  const decoTime = new Date(Date.now() + remaining);
   
   return {
-    title: `📊 STATISTIQUES - ${player}`,
-    color: 3447003,
-    fields: [
-      { name: "⏱️ Temps Total", value: totalTime, inline: true },
-      { name: "📈 Moyenne/Session", value: avgSession, inline: true },
-      { name: "🔢 Sessions Totales", value: `${stats.sessions.length}`, inline: true },
-      { name: "🕐 Heures Favorites", value: peaksText, inline: false },
-      { name: "📅 Activité Hebdo", value: getWeeklyTrend(player), inline: false },
-      { name: "🔮 Prochaine Connexion", value: predictionText, inline: false }
-    ],
-    footer: { text: `Dernière activité: ${stats.lastSeen ? new Date(stats.lastSeen).toLocaleString('fr-FR') : 'Jamais'}` },
-    timestamp: new Date().toISOString()
+    hour: decoTime.getHours(),
+    minute: decoTime.getMinutes(),
+    confidence: Math.min(100, (similarSessions.length / recentSessions.length) * 100)
   };
 }
 
@@ -421,8 +388,14 @@ async function checkPlayers() {
     if (watchedOnline.length) {
       statusText += `🟢 **En ligne (${watchedOnline.length}):**\n`;
       watchedOnline.forEach(p => {
-        const avgTime = formatDuration(getAverageSessionTime(p));
-        statusText += `• ${p} (moy: ${avgTime})\n`;
+        const pred = predictDisconnection(p);
+        let predText = 'Calcul...';
+        if (pred) {
+          predText = `Déco vers ${pred.hour}h${String(pred.minute).padStart(2,'0')} (${Math.round(pred.confidence)}%)`;
+        } else if (playerStats[p].sessions.length < 5) {
+          predText = 'Pas assez de données';
+        }
+        statusText += `• ${p} → ${predText}\n`;
       });
     }
     if (watchedOffline.length) {
@@ -430,8 +403,13 @@ async function checkPlayers() {
       statusText += `⚪ **Hors ligne (${watchedOffline.length}):**\n`;
       watchedOffline.forEach(p => {
         const pred = predictNextConnection(p);
-        const predText = pred ? `${pred.hour}h (${Math.round(pred.confidence)}%)` : 'N/A';
-        statusText += `• ${p} (prévu: ${predText})\n`;
+        let predText = 'Calcul...';
+        if (pred) {
+          predText = `Co vers ${pred.hour}h (${Math.round(pred.confidence)}%)`;
+        } else if (playerStats[p].sessions.length < 5) {
+          predText = 'Pas assez de données';
+        }
+        statusText += `• ${p} → ${predText}\n`;
       });
     }
 
@@ -444,7 +422,7 @@ async function checkPlayers() {
         { name: "⏱️ Dernier Relevé", value: `**${timeStr}**`, inline: true },
         { name: "👁️ Statut Surveillance", value: statusText || "Aucun joueur surveillé en ligne" }
       ],
-      footer: { text: "Scanner avec IA prédictive • Actualisation 1s • !stats [joueur] pour détails" },
+      footer: { text: "Scanner avec prédictions IA • Actualisation 1s" },
       timestamp: new Date().toISOString()
     };
 
@@ -452,18 +430,6 @@ async function checkPlayers() {
     console.log(`[${timeStr}] Scanner OK - ${watchedOnline.length}/${WATCH_LIST.length} en ligne`);
   } catch (e) {
     console.error('❌ Erreur Scanner:', e.message);
-  }
-}
-
-// ==================== COMMANDES ====================
-
-function handleCommand(message) {
-  if (message.startsWith('!stats ')) {
-    const player = message.substring(7).trim();
-    if (WATCH_LIST.includes(player)) {
-      const statsEmbed = generateStatsEmbed(player);
-      sendAlert(statsEmbed);
-    }
   }
 }
 
@@ -488,13 +454,12 @@ if (RENDER_URL) {
 // Keep alive server
 const server = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('LIME Scanner running ✅\nCommandes: !stats [joueur]');
+  res.end('LIME Scanner running ✅');
 });
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`🚀 Serveur démarré sur le port ${PORT}`);
-  console.log('📡 Scanner: Surveillance WATCH_LIST avec IA prédictive');
+  console.log('📡 Scanner: Surveillance WATCH_LIST avec prédictions');
   console.log(`👁️ ${WATCH_LIST.length} joueurs surveillés`);
-  console.log('📊 Système de stats et prédictions activé');
 });
