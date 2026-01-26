@@ -22,7 +22,7 @@ const WATCH_LIST = [
   'Farsgame',
   'ClashKiller78',
   'Olmat38',
-  'AstaPatate'
+  'AstaPatate',
   'theredpoloytb'
 ];
 
