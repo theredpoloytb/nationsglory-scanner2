@@ -23,6 +23,7 @@ const WATCH_LIST = [
   'ClashKiller78',
   'Olmat38',
   'AstaPatate'
+  'theredpoloytb'
 ];
 
 // ==================== VERIFICATION WEBHOOK ====================
