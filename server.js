@@ -16,15 +16,13 @@ const WATCH_LIST = [
   'Canisi',
   'Darkholess',
   'UFO_Thespoot',
-  'firecharge94',
   'Franky753',
   'Blakonne',
   'Thepainx31x',
   'Farsgame',
   'ClashKiller78',
   'Olmat38',
-  'AstaPatate',
-  'theredpoloytb'
+  'AstaPatate'
 ];
 
 // ==================== VERIFICATION WEBHOOK ====================
@@ -407,28 +405,14 @@ async function checkPlayers() {
     if (watchedOnline.length) {
       statusText += `🟢 **En ligne (${watchedOnline.length}):**\n`;
       watchedOnline.forEach(p => {
-        const pred = predictDisconnection(p);
-        let predText = 'Calcul...';
-        if (pred) {
-          predText = `Déco vers ${pred.hour}h${String(pred.minute).padStart(2,'0')} (${Math.round(pred.confidence)}%)`;
-        } else if (playerStats[p].sessions.length < 5) {
-          predText = 'Pas assez de données';
-        }
-        statusText += `• ${p} → ${predText}\n`;
+        statusText += `• ${p}\n`;
       });
     }
     if (watchedOffline.length) {
       if (statusText) statusText += '\n';
       statusText += `⚪ **Hors ligne (${watchedOffline.length}):**\n`;
       watchedOffline.forEach(p => {
-        const pred = predictNextConnection(p);
-        let predText = 'Calcul...';
-        if (pred) {
-          predText = `Co vers ${pred.hour}h (${Math.round(pred.confidence)}%)`;
-        } else if (playerStats[p].sessions.length < 5) {
-          predText = 'Pas assez de données';
-        }
-        statusText += `• ${p} → ${predText}\n`;
+        statusText += `• ${p}\n`;
       });
     }
 
@@ -441,7 +425,7 @@ async function checkPlayers() {
         { name: "⏱️ Dernier Relevé", value: `**${timeStr}**`, inline: true },
         { name: "👁️ Statut Surveillance", value: statusText || "Aucun joueur surveillé en ligne" }
       ],
-      footer: { text: "Scanner avec prédictions IA • Actualisation 1s" },
+      footer: { text: "Scanner en temps réel • Actualisation 1s" },
       timestamp: new Date().toISOString()
     };
 
@@ -483,6 +467,6 @@ const server = http.createServer((req, res) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`🚀 Serveur démarré sur le port ${PORT}`);
-  console.log('📡 Scanner: Surveillance WATCH_LIST avec prédictions');
+  console.log('📡 Scanner: Surveillance WATCH_LIST en temps réel');
   console.log(`👁️ ${WATCH_LIST.length} joueurs surveillés`);
 });
