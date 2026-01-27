@@ -5,6 +5,7 @@ const http = require('http');
 // ==================== CONFIG ====================
 const DYNMAP_URL = process.env.DYNMAP_URL || 'https://lime.nationsglory.fr/standalone/dynmap_world.json';
 const WEBHOOK_URL = process.env.DISCORD_WEBHOOK || '';
+const WEBHOOK_ALERT_URL = process.env.DISCORD_WEBHOOK_ALERT || ''; // Webhook pour les alertes co/deco
 const CHECK_INTERVAL = parseInt(process.env.CHECK_INTERVAL) || 1000;
 const MESSAGE_FILE = 'message_id.txt';
 const STATS_FILE = 'player_stats.json';
@@ -32,10 +33,16 @@ if (!WEBHOOK_URL) {
   process.exit(1);
 }
 
+if (!WEBHOOK_ALERT_URL) {
+  console.warn('⚠️ ATTENTION: DISCORD_WEBHOOK_ALERT non défini, les alertes seront désactivées');
+}
+
 // ==================== VARIABLES ====================
 let messageId = null;
 let webhookId = null;
 let webhookToken = null;
+let webhookAlertId = null;
+let webhookAlertToken = null;
 let lastDiscordRequest = 0;
 const DISCORD_DELAY = 500;
 let playerStats = {};
@@ -215,6 +222,12 @@ function parseWebhook(url) {
   webhookToken = parts[parts.length - 1];
 }
 
+function parseWebhookAlert(url) {
+  const parts = url.split('/');
+  webhookAlertId = parts[parts.length - 2];
+  webhookAlertToken = parts[parts.length - 1];
+}
+
 function loadMessageId() {
   if (fs.existsSync(MESSAGE_FILE)) {
     messageId = fs.readFileSync(MESSAGE_FILE, 'utf8').trim();
@@ -314,11 +327,16 @@ async function sendOrEditMessage(embed) {
 }
 
 async function sendAlert(embed) {
+  if (!WEBHOOK_ALERT_URL) {
+    console.log('⚠️ Webhook alerte non configurée, alerte ignorée');
+    return;
+  }
+  
   try {
     await waitForRateLimit();
     await makeRequest(
       'POST',
-      `/api/webhooks/${webhookId}/${webhookToken}`,
+      `/api/webhooks/${webhookAlertId}/${webhookAlertToken}`,
       { embeds: [embed] }
     );
   } catch (e) {
@@ -436,6 +454,10 @@ async function checkPlayers() {
 
 // ==================== INITIALISATION ====================
 parseWebhook(WEBHOOK_URL);
+if (WEBHOOK_ALERT_URL) {
+  parseWebhookAlert(WEBHOOK_ALERT_URL);
+  console.log('✅ Webhook alerte configurée');
+}
 loadMessageId();
 loadStats();
 
